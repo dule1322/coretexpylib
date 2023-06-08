@@ -19,9 +19,6 @@ jobs:
     environment: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v3
-      - name: Print environment
-        run: |
-          echo ${{ github.base_ref }}
       - name: Set up Python
         uses: actions/setup-python@v3
         with:
