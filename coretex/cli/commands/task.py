@@ -59,7 +59,7 @@ def run(path: str, name: Optional[str], description: Optional[str], snapshot: bo
 
     taskRun.updateStatus(TaskRunStatus.preparingToStart)
 
-    with TaskRunWorker(config["refreshToken"], taskRun.id):
+    with TaskRunWorker(taskRun):
         runLogger.attach(taskRun.id)
 
         command = [

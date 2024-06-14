@@ -17,117 +17,46 @@
 
 from typing import Optional, Type
 from typing_extensions import Self
-from types import TracebackType, FrameType
-from multiprocessing.connection import Connection
+from types import TracebackType
+from pathlib import Path
 
 import time
-import timeit
-import os
 import logging
-import multiprocessing
-import signal
+import threading
 
-import psutil
-
-from . import utils, metrics, artifacts
+from . import metrics, artifacts
 from ...entities import TaskRun
-from ...networking import networkManager, NetworkRequestError
+from ...networking import NetworkRequestError
+from ...utils.misc import measure
 
 
-def _update(taskRun: TaskRun) -> None:
-    logging.getLogger("coretexpylib").debug(">> [Coretex] Heartbeat")
-    taskRun.updateStatus()  # updateStatus without params is considered heartbeat
-
-    logging.getLogger("coretexpylib").debug(">> [Coretex] Uploading metrics")
-    metrics.upload(taskRun)
+UPDATE_INTERVAL = 5  # seconds
 
 
-def _taskRunWorker(output: Connection, refreshToken: str, taskRunId: int, parentId: int) -> None:
-    isStopped = False
+class TaskRunWorker(threading.Thread):
 
-    def handleTerminateSignal(signum: int, frame: Optional[FrameType]) -> None:
-        if signum != signal.SIGTERM:
-            return
+    def __init__(self, taskRun: TaskRun) -> None:
+        super().__init__(daemon = True, name = f"task-run-worker-{taskRun.id}")
 
-        logging.getLogger("coretexpylib").debug(">> [Coretex] Received terminate signal. Terminating...")
+        self.taskRun = taskRun
 
-        nonlocal isStopped
-        isStopped = True
+        self._stopFlag = threading.Event()
+        self._killFlag = threading.Event()
 
-    signal.signal(signal.SIGTERM, handleTerminateSignal)
-    utils.initializeLogger(taskRunId)
+    @property
+    def isStopped(self) -> bool:
+        return self._stopFlag.is_set()
 
-    response = networkManager.authenticateWithRefreshToken(refreshToken)
-    if response.hasFailed():
-        utils.sendFailure(output, "Failed to authenticate with refresh token")
-        return
+    @property
+    def isKilled(self) -> bool:
+        return self._killFlag.is_set()
 
-    try:
-        taskRun: TaskRun = TaskRun.fetchById(taskRunId)
-    except NetworkRequestError:
-        utils.sendFailure(output, f"Failed to fetch TaskRun with id \"{taskRunId}\"")
-        return
+    def stop(self, wait: bool = True) -> None:
+        logging.getLogger("coretexpylib").info(">> [Coretex] Stopping the Task Run worker thread")
+        self._stopFlag.set()
 
-    try:
-        metrics.create(taskRun)
-    except NetworkRequestError:
-        utils.sendFailure(output, "Failed to create metrics")
-        return
-
-    utils.sendSuccess(output, "TaskRun worker succcessfully started")
-
-    parent = psutil.Process(parentId)
-    current = psutil.Process(os.getpid())
-
-    # Start tracking files which are created inside current working directory
-    with artifacts.track(taskRun):
-        while parent.is_running() and not isStopped:
-            logging.getLogger("coretexpylib").debug(f">> [Coretex] Worker process id {current.pid}, parent process id {parent.pid}")
-
-            # Measure elapsed time to calculate for how long should the process sleep
-            start = timeit.default_timer()
-            _update(taskRun)
-            diff = timeit.default_timer() - start
-
-            # Make sure that metrics and heartbeat are sent every 5 seconds
-            if diff < 5:
-                sleepTime = 5 - diff
-                logging.getLogger("coretexpylib").debug(f">> [Coretex] Sleeping for {sleepTime}s")
-                time.sleep(sleepTime)
-
-    logging.getLogger("coretexpylib").debug(">> [Coretex] Finished")
-
-
-class TaskRunWorker:
-
-    def __init__(self, refreshToken: str, taskRunId: int) -> None:
-        self._refreshToken = refreshToken
-
-        output, input = multiprocessing.Pipe()
-        self.__input = input
-
-        self.__process = multiprocessing.Process(
-            name = f"TaskRun {taskRunId} worker process",
-            target = _taskRunWorker,
-            args = (output, refreshToken, taskRunId, os.getpid()),
-            daemon = True
-        )
-
-    def start(self) -> None:
-        self.__process.start()
-
-        result = self.__input.recv()
-        if result["code"] != 0:
-            raise RuntimeError(result["message"])
-
-        message = result["message"]
-        logging.getLogger("coretexpylib").info(f">> [Coretex] {message}")
-
-    def stop(self) -> None:
-        logging.getLogger("coretexpylib").info(">> [Coretex] Stopping the worker process")
-
-        self.__process.terminate()
-        self.__process.join()
+        if wait:
+            self.join()
 
     def __enter__(self) -> Self:
         self.start()
@@ -140,9 +69,50 @@ class TaskRunWorker:
         exceptionTraceback: Optional[TracebackType]
     ) -> None:
 
-        if self.__process.is_alive():
+        if self.is_alive():
             self.stop()
 
     def kill(self) -> None:
-        logging.getLogger("coretexpylib").info(">> [Coretex] Killing the worker process")
-        self.__process.kill()
+        logging.getLogger("coretexpylib").info(">> [Coretex] Killing the Task Run worker thread")
+
+        self._killFlag.set()
+        self.stop()
+
+    def _update(self, sendMetrics: bool) -> None:
+        logging.getLogger("coretexpylib").debug(">> [Coretex] Heartbeat")
+        self.taskRun.updateStatus()  # updateStatus without params is considered heartbeat
+
+        if sendMetrics:
+            logging.getLogger("coretexpylib").debug(">> [Coretex] Uploading metrics")
+            metrics.upload(self.taskRun)
+
+    def run(self) -> None:
+        try:
+            metrics.create(self.taskRun)
+            sendMetrics = True
+        except NetworkRequestError:
+            logging.getLogger("coretexpylib").info("Failed to initialize Task metrics")
+            sendMetrics = False
+
+        logging.getLogger("coretexpylib").info("TaskRun worker succcessfully started")
+
+        # If local use current working dir, else use task path
+        root = Path.cwd() if self.taskRun.isLocal else self.taskRun.taskPath
+
+        # Start tracking files which are created inside current working directory
+        with artifacts.track(root) as artifactsTracker:
+            while not self.isStopped:
+                # Measure elapsed time to calculate for how long should the process sleep
+                duration, _ = measure(self._update, sendMetrics)
+
+                # Make sure that metrics and heartbeat are sent every UPDATE_INTERVAL seconds
+                if duration < UPDATE_INTERVAL:
+                    sleepTime = UPDATE_INTERVAL - duration
+                    logging.getLogger("coretexpylib").debug(f">> [Coretex] Task Run worker sleeping for {sleepTime}s")
+                    time.sleep(sleepTime)
+
+            # Only upload artifacts if worker was not killed
+            if not self.isKilled:
+                artifactsTracker.uploadTrackedArtifacts(self.taskRun, root)
+            else:
+                logging.getLogger("coretexpylib").warning(">> [Coretex] Task Run worker killed, skipping upload of automatically tracked Artifacts")
