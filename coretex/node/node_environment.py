@@ -15,6 +15,21 @@
 #     You should have received a copy of the GNU Affero General Public License
 #     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from .node_environment import NodeEnvironment
-from .node_mode import NodeMode
-from .node_status import NodeStatus
+from enum import Enum
+
+
+class NodeEnvironment(Enum):
+
+    development = "dev"
+    stage       = "stage"
+    production  = "production"
+
+    def coretexpylibSource(self) -> str:
+        if self == NodeEnvironment.development:
+            branch = "develop"
+        elif self == NodeEnvironment.stage:
+            branch = "stage"
+        elif self == NodeEnvironment.production:
+            branch = "main"
+
+        return f"git+https://github.com/coretex-ai/coretexpylib@{branch}#egg=coretex"
