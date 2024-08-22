@@ -24,7 +24,7 @@ from ..network_dataset import NetworkDataset
 from ...sample import ImageSample
 from ...annotation import ImageDatasetClass, ImageDatasetClasses
 from ....codable import KeyDescriptor, Codable
-from ....networking import networkManager, FileData, NetworkRequestError
+from ....networking import networkManager, FileDescriptor, NetworkRequestError
 
 
 class ClassDistribution(Codable):
@@ -88,7 +88,7 @@ class ImageDataset(BaseImageDataset[ImageSample], NetworkDataset[ImageSample]): 
         }
 
         files = [
-            FileData.createFromPath("file", samplePath)
+            FileDescriptor.fromPath("file", samplePath)
         ]
 
         response = networkManager.formData("session/import", params, files)

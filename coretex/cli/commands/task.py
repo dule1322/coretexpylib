@@ -73,7 +73,7 @@ def run(path: str, name: Optional[str], description: Optional[str], snapshot: bo
         runLogger.attach(taskRun.id)
 
         command = [
-            "python", str(PYTHON_ENTRY_POINT_PATH),
+            "python", "-u", str(PYTHON_ENTRY_POINT_PATH),
             "--taskRunId", str(taskRun.id),
             "--refreshToken", userConfig.refreshToken
         ]

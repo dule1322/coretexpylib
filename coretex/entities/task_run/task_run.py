@@ -37,7 +37,7 @@ from ..project import ProjectType
 from ..model import Model
 from ..._folder_manager import folder_manager
 from ...codable import KeyDescriptor
-from ...networking import networkManager, NetworkObject, NetworkRequestError, FileData
+from ...networking import networkManager, NetworkObject, NetworkRequestError, FileDescriptor
 
 
 DatasetType = TypeVar("DatasetType", bound = Dataset)
@@ -640,7 +640,7 @@ class TaskRun(NetworkObject, Generic[DatasetType]):
 
         # Create snapshot
         if saveSnapshot:
-            files = [FileData.createFromPath("file", createSnapshot())]
+            files = [FileDescriptor.fromPath("file", createSnapshot())]
         else:
             files = None
 

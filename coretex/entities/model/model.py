@@ -27,7 +27,7 @@ import logging
 from ..tag import Taggable, EntityTagType
 from ..utils import isEntityNameValid
 from ..._folder_manager import folder_manager
-from ...networking import networkManager, NetworkObject, ChunkUploadSession, MAX_CHUNK_SIZE, NetworkRequestError
+from ...networking import networkManager, NetworkObject, fileChunkUpload, NetworkRequestError
 from ...codable import KeyDescriptor
 
 
@@ -276,8 +276,8 @@ class Model(NetworkObject, Taggable):
 
                 zipFile.write(value, value.relative_to(path))
 
-        uploadSession = ChunkUploadSession(MAX_CHUNK_SIZE, zipPath)
-        uploadId = uploadSession.run()
+        # Uploads the Model file in chunks of 128 MiBs
+        uploadId = fileChunkUpload(zipPath)
 
         parameters = {
             "id": self.id,

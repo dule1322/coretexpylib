@@ -33,13 +33,13 @@ import requests.adapters
 from .utils import RequestBodyType, RequestFormType, logFilesData, logRequestFailure, sleepBeforeRetry, getTimeoutForRetry
 from .request_type import RequestType
 from .network_response import NetworkResponse, NetworkRequestError
-from .file_data import FileData
+from .file_data import FileDescriptor
 
 
 logger = logging.getLogger("coretexpylib")
 
 REQUEST_TIMEOUT      = (5, 10)     # Connection = 5 seconds, Read = 10 seconds
-MAX_REQUEST_TIMEOUT  = (60, 180)   # Connection = 60 seconds, Read = 3 minutes
+MAX_REQUEST_TIMEOUT  = (60, 180)   # Connection = 1 minute, Read = 3 minutes
 DOWNLOAD_TIMEOUT     = (5, 60)     # Connection = 5 seconds, Read = 1 minute
 MAX_DOWNLOAD_TIMEOUT = (60, 180)   # Connection = 1 minute, Read = 3 minutes
 UPLOAD_TIMEOUT       = (5, 60)     # Connection = 5 seconds, Read = 1 minute
@@ -278,7 +278,7 @@ class NetworkManagerBase(ABC):
                 # If an exception happened during the request add a delay before retrying
                 sleepBeforeRetry(retryCount, endpoint)
 
-                if isinstance(ex, requests.exceptions.Timeout):
+                if isinstance(ex, requests.exceptions.ConnectionError) and "timeout" in str(ex):
                     # If request failed due to timeout recalculate (increase) the timeout
                     oldTimeout = timeout
                     timeout = getTimeoutForRetry(retryCount + 1, timeout, maxTimeout)
@@ -415,7 +415,7 @@ class NetworkManagerBase(ABC):
         self,
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
-        files: Optional[List[FileData]] = None
+        files: Optional[List[FileDescriptor]] = None
     ) -> NetworkResponse:
 
         """
@@ -427,7 +427,7 @@ class NetworkManagerBase(ABC):
                 endpoint to which the request is sent
             params : Optional[Dict[str, Any]]
                 form data parameters
-            files : Optional[List[FileData]]
+            files : Optional[List[FileDescriptor]]
                 form data files
 
             Returns

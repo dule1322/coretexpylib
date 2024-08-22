@@ -29,7 +29,7 @@ from ..project import ProjectType
 from ..._folder_manager import folder_manager
 from ...codable import KeyDescriptor
 from ...networking import NetworkObject, networkManager, NetworkRequestError, \
-    fileChunkUpload, MAX_CHUNK_SIZE, FileData
+    fileChunkUpload, MAX_CHUNK_SIZE, FileDescriptor
 from ...utils import TIME_ZONE
 from ...cryptography import getProjectKey, aes
 
@@ -243,7 +243,7 @@ class NetworkSample(Generic[SampleDataType], Sample[SampleDataType], NetworkObje
                 "id": self.id
             }
 
-            files: List[FileData] = []
+            files: List[FileDescriptor] = []
 
             # Use chunk upload if file is larger than MAX_CHUNK_SIZE
             # Use normal upload if file is smaller than MAX_CHUNK_SIZE
@@ -252,7 +252,7 @@ class NetworkSample(Generic[SampleDataType], Sample[SampleDataType], NetworkObje
             if size > MAX_CHUNK_SIZE:
                 params["file_id"] = fileChunkUpload(encryptedPath)
             else:
-                files.append(FileData.createFromPath("file", encryptedPath))
+                files.append(FileDescriptor.fromPath("file", encryptedPath))
 
             response = networkManager.formData(f"{self._endpoint()}/upload", params, files)
             if response.hasFailed():

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from ..._folder_manager import folder_manager
 from ...codable import Codable, KeyDescriptor
-from ...networking import networkManager, FileData
+from ...networking import networkManager, FileDescriptor
 from ...utils import guessMimeType
 
 
@@ -130,7 +130,7 @@ class Artifact(Codable):
         }
 
         files = [
-            FileData.createFromPath("file", localFilePath, mimeType = mimeType)
+            FileDescriptor.fromPath("file", localFilePath, mimeType = mimeType)
         ]
 
         response = networkManager.formData("artifact/upload-file", parameters, files)

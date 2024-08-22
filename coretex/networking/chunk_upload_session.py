@@ -15,12 +15,12 @@
 #     You should have received a copy of the GNU Affero General Public License
 #     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from typing import Union
+from typing import Union, Iterator, Tuple
 from pathlib import Path
 
 import logging
 
-from .network_manager_base import FileData
+from .network_manager_base import FileDescriptor
 from .network_manager import networkManager
 from .network_response import NetworkRequestError
 
@@ -28,125 +28,64 @@ from .network_response import NetworkRequestError
 MAX_CHUNK_SIZE = 128 * 1024 * 1024  # 128 MiB
 
 
-def _loadChunk(filePath: Path, start: int, chunkSize: int) -> bytes:
-    with filePath.open("rb") as file:
-        file.seek(start)
-        return file.read(chunkSize)
+def initiateChunkUploadSession(path: Path) -> str:
+    parameters = {
+        "size": path.stat().st_size
+    }
+
+    response = networkManager.post("upload/start", parameters)
+    if response.hasFailed():
+        raise NetworkRequestError(response, f"Failed to initiate chunk upload session for \"{path}\"")
+
+    uploadId = response.getJson(dict).get("id")
+
+    if not isinstance(uploadId, str):
+        raise TypeError(f">> [Coretex] Field \"id\" is of tpye")
+
+    return uploadId
 
 
-class ChunkUploadSession:
+def chunks(path: Path, chunkSize: int) -> Iterator[Tuple[int, int, bytes]]:
+    with path.open("rb") as file:
+        while True:
+            # Position before read is start
+            start = file.tell()
 
-    """
-        A class which splits a file into chunks and uploades it
-        chunk by chunk. This class should be used for uploading
-        files larger than 2 GiB, since Python does not support
-        uploading files with a larger size.
+            # Read the chunk
+            chunk = file.read(chunkSize)
 
-        Maximum chunk size is 128 MiB.
+            # Read until there are no more bytes
+            if not chunk:
+                break
 
-        Properties
-        ----------
-        chunkSize : int
-            size of chunks into which the file will be split
-            maximum value is 128 MiB, while the minimum value is 1
-        filePath : Union[Path, str]
-            path to the file which will be uploaded
-        fileSize : int
-            size of the file which will be uploaded
-    """
+            # Position after the read is end
+            end = file.tell()
 
-    def __init__(self, chunkSize: int, filePath: Union[Path, str]) -> None:
-        if chunkSize <= 0 or chunkSize > MAX_CHUNK_SIZE:
-            raise ValueError(f">> [Coretex] Invalid \"chunkSize\" value \"{chunkSize}\". Value must be in range 0-{MAX_CHUNK_SIZE}")
-
-        if isinstance(filePath, str):
-            filePath = Path(filePath)
-
-        self.chunkSize = chunkSize
-        self.filePath = filePath
-        self.fileSize = filePath.lstat().st_size
-
-    def __start(self) -> str:
-        parameters = {
-            "size": self.fileSize
-        }
-
-        response = networkManager.post("upload/start", parameters)
-        if response.hasFailed():
-            raise NetworkRequestError(response, f"Failed to start chunked upload for \"{self.filePath}\"")
-
-        uploadId = response.getJson(dict).get("id")
-
-        if not isinstance(uploadId, str):
-            raise ValueError(f">> [Coretex] Invalid API response, invalid value \"{uploadId}\" for field \"id\"")
-
-        return uploadId
-
-    def __uploadChunk(self, uploadId: str, start: int, end: int) -> None:
-        parameters = {
-            "id": uploadId,
-            "start": start,
-            "end": end - 1  # API expects start/end to be inclusive
-        }
-
-        chunk = _loadChunk(self.filePath, start, self.chunkSize)
-        files = [
-            FileData.createFromBytes("file", chunk, self.filePath.name)
-        ]
-
-        response = networkManager.formData("upload/chunk", parameters, files)
-        if response.hasFailed():
-            raise NetworkRequestError(response, f"Failed to upload file chunk with byte range \"{start}-{end}\"")
-
-        logging.getLogger("coretexpylib").debug(f">> [Coretex] Uploaded chunk with range \"{start}-{end}\"")
-
-    def run(self) -> str:
-        """
-            Uploads the file to Coretex.ai
-
-            Returns
-            -------
-            str -> ID of the uploaded file
-
-            Raises
-            ------
-            NetworkRequestError, ValueError -> if some kind of error happened during
-            the upload of the provided file
-
-            Example
-            -------
-            >>> from coretex.networking import ChunkUploadSession, NetworkRequestError
-            \b
-            >>> chunkSize = 16 * 1024 * 1024  # chunk size: 16 MiB
-            >>> uploadSession = ChunkUploadSession(chunkSize, path/fo/file.ext)
-            \b
-            >>> try:
-                    uploadId = uploadSession.run()
-                    print(uploadId)
-                except NetworkRequestError, ValueError:
-                    print("Failed to upload file")
-        """
-        logging.getLogger("coretexpylib").debug(f">> [Coretex] Starting upload for \"{self.filePath}\"")
-
-        uploadId = self.__start()
-
-        chunkCount = self.fileSize // self.chunkSize
-        if self.fileSize % self.chunkSize != 0:
-            chunkCount += 1
-
-        for i in range(chunkCount):
-            start = i * self.chunkSize
-            end = min(start + self.chunkSize, self.fileSize)
-
-            self.__uploadChunk(uploadId, start, end)
-
-        return uploadId
+            yield start, end, chunk
 
 
-def fileChunkUpload(path: Path, chunkSize: int = MAX_CHUNK_SIZE) -> str:
+def uploadChunk(sessionId: str, fileName: str, start: int, end: int, data: bytes) -> None:
+    parameters = {
+        "id": sessionId,
+        "start": start,
+        "end": end - 1  # API expects start/end to be inclusive
+    }
+
+    files = [
+        FileDescriptor.fromBytes("file", fileName, data)
+    ]
+
+    response = networkManager.formData("upload/chunk", parameters, files)
+    if response.hasFailed():
+        raise NetworkRequestError(response, f"Failed to upload file chunk with byte range \"{start}-{end}\"")
+
+    logging.getLogger("coretexpylib").debug(f">> [Coretex] Uploaded chunk with range \"{start}-{end}\"")
+
+
+def fileChunkUpload(path: Union[Path, str], chunkSize: int = MAX_CHUNK_SIZE) -> str:
     """
         Uploads file in chunks to Coretex.ai server.
-        Should be used when uploading large files.
+        Should be used when uploading files larger than 128 MiB.
 
         Parameters
         ----------
@@ -154,12 +93,18 @@ def fileChunkUpload(path: Path, chunkSize: int = MAX_CHUNK_SIZE) -> str:
             File which will be uploaded in chunks
         chunkSize : int
             Size of the chunks into which file will be split
-            before uploading. Maximum value is 128 MiBs
+            before uploading. Maximum value is 128 MiBs.
 
         Returns
         -------
         str -> id of the file which was uploaded
     """
+
+    if isinstance(path, str):
+        path = Path(path)
+
+    if not path.exists():
+        raise FileNotFoundError(path)
 
     if not path.is_file():
         raise ValueError(f"{path} is not a file")
@@ -167,5 +112,9 @@ def fileChunkUpload(path: Path, chunkSize: int = MAX_CHUNK_SIZE) -> str:
     if chunkSize > MAX_CHUNK_SIZE:
         chunkSize = MAX_CHUNK_SIZE
 
-    uploadSession = ChunkUploadSession(MAX_CHUNK_SIZE, path)
-    return uploadSession.run()
+    sessionId = initiateChunkUploadSession(path)
+
+    for start, end, chunk in chunks(path, chunkSize):
+        uploadChunk(sessionId, path.name, start, end, chunk)
+
+    return sessionId
